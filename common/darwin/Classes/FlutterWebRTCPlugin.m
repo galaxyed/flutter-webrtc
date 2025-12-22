@@ -9,6 +9,8 @@
 #import "FlutterRTCPeerConnection.h"
 #import "FlutterRTCVideoRenderer.h"
 #import "FlutterRTCFrameCryptor.h"
+#import "VideoRendererManager.h"
+#import "VideoRendererInstance.h"
 #if TARGET_OS_IPHONE
 #import "FlutterRTCMediaRecorder.h"
 #import "FlutterRTCVideoPlatformViewFactory.h"
@@ -194,6 +196,9 @@ static FlutterWebRTCPlugin *sharedSingleton;
   self.keyProviders = [NSMutableDictionary new];
   self.videoCapturerStopHandlers = [NSMutableDictionary new];
   self.recorders = [NSMutableDictionary new];
+
+  // Initialize VideoRendererManager for multi-renderer support
+  self.videoRendererManager = [[VideoRendererManager alloc] initWithRegistry:_textures];
 #if TARGET_OS_IPHONE
   self.focusMode = @"locked";
   self.exposureMode = @"locked";
@@ -1641,6 +1646,51 @@ static FlutterWebRTCPlugin *sharedSingleton;
       RTCAudioDeviceModule* adm = _peerConnectionFactory.audioDeviceModule;
       NSNumber* value = call.arguments[@"value"];
       adm.voiceProcessingBypassed = value.boolValue;
+      result(nil);
+    } else if ([@"createRenderer" isEqualToString:call.method]) {
+      NSDictionary* argsMap = call.arguments;
+      NSString* trackId = argsMap[@"trackId"];
+
+      if (!trackId) {
+        result([FlutterError errorWithCode:@"createRendererFailed"
+                                   message:@"trackId is required"
+                                   details:nil]);
+        return;
+      }
+
+      // Lookup video track by trackId
+      RTCMediaStreamTrack* track = [self trackForId:trackId peerConnectionId:nil];
+      if (!track || ![track isKindOfClass:[RTCVideoTrack class]]) {
+        result([FlutterError errorWithCode:@"createRendererFailed"
+                                   message:[NSString stringWithFormat:@"VideoTrack not found for trackId: %@", trackId]
+                                   details:nil]);
+        return;
+      }
+
+      RTCVideoTrack* videoTrack = (RTCVideoTrack*)track;
+      int64_t textureId = [self.videoRendererManager createRendererForTrack:videoTrack];
+
+      if (textureId == -1) {
+        result([FlutterError errorWithCode:@"createRendererFailed"
+                                   message:@"Failed to create renderer instance"
+                                   details:nil]);
+        return;
+      }
+
+      result(@(textureId));
+    } else if ([@"disposeRenderer" isEqualToString:call.method]) {
+      NSDictionary* argsMap = call.arguments;
+      NSNumber* textureIdNumber = argsMap[@"textureId"];
+
+      if (!textureIdNumber) {
+        result([FlutterError errorWithCode:@"disposeRendererFailed"
+                                   message:@"textureId is required"
+                                   details:nil]);
+        return;
+      }
+
+      int64_t textureId = textureIdNumber.longLongValue;
+      [self.videoRendererManager disposeRenderer:textureId];
       result(nil);
     } else {
       if([self handleFrameCryptorMethodCall:call result:result]) {

@@ -1,5 +1,6 @@
 #include "flutter_webrtc.h"
 #include "flutter_data_channel.h"
+#include "video_renderer_manager.h"
 
 #include "flutter_webrtc/flutter_web_r_t_c_plugin.h"
 
@@ -16,7 +17,11 @@ FlutterWebRTC::FlutterWebRTC(FlutterWebRTCPlugin* plugin)
       FlutterPeerConnection::FlutterPeerConnection(this),
       FlutterScreenCapture::FlutterScreenCapture(this),
       FlutterDataChannel::FlutterDataChannel(this),
-      FlutterFrameCryptor::FlutterFrameCryptor(this) {}
+      FlutterFrameCryptor::FlutterFrameCryptor(this) {
+  // Initialize VideoRendererManager for multi-renderer support
+  video_renderer_manager_ = std::make_unique<VideoRendererManager>(
+      plugin->textures(), plugin->messenger(), plugin->task_runner());
+}
 
 FlutterWebRTC::~FlutterWebRTC() {}
 
@@ -1286,6 +1291,65 @@ void FlutterWebRTC::HandleMethodCall(
       RTCLoggingSeverity severity = str2LogSeverity(severityStr);
       initLoggerCallback(severity);
     }
+  } else if (method_call.method_name().compare("createRenderer") == 0) {
+    if (!method_call.arguments()) {
+      result->Error("Bad Arguments", "Null arguments received");
+      return;
+    }
+    const EncodableMap params =
+        GetValue<EncodableMap>(*method_call.arguments());
+    const std::string trackId = findString(params, "trackId");
+
+    if (trackId.empty()) {
+      result->Error("createRendererFailed", "trackId is required");
+      return;
+    }
+
+    // Lookup video track by trackId
+    RTCMediaTrack* track = MediaTrackForId(trackId);
+    if (!track) {
+      result->Error("createRendererFailed",
+                   "VideoTrack not found for trackId: " + trackId);
+      return;
+    }
+
+    std::string kind = track->kind().std_string();
+    if (kind != "video") {
+      result->Error("createRendererFailed",
+                   "Track is not a video track");
+      return;
+    }
+
+    RTCVideoTrack* videoTrack = reinterpret_cast<RTCVideoTrack*>(track);
+    int64_t textureId = video_renderer_manager_->CreateRendererForTrack(videoTrack);
+
+    if (textureId == -1) {
+      result->Error("createRendererFailed",
+                   "Failed to create renderer instance");
+      return;
+    }
+
+    result->Success(EncodableValue(textureId));
+  } else if (method_call.method_name().compare("disposeRenderer") == 0) {
+    if (!method_call.arguments()) {
+      result->Error("Bad Arguments", "Null arguments received");
+      return;
+    }
+    const EncodableMap params =
+        GetValue<EncodableMap>(*method_call.arguments());
+
+    int64_t textureId = -1;
+    if (params.find(EncodableValue("textureId")) != params.end()) {
+      textureId = GetValue<int64_t>(params.at(EncodableValue("textureId")));
+    }
+
+    if (textureId == -1) {
+      result->Error("disposeRendererFailed", "textureId is required");
+      return;
+    }
+
+    video_renderer_manager_->DisposeRenderer(textureId);
+    result->Success();
   } else {
     if (HandleFrameCryptorMethodCall(method_call, std::move(result), &result)) {
       return;

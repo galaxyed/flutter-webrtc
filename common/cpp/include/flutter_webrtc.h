@@ -9,6 +9,7 @@
 #include "flutter_peerconnection.h"
 #include "flutter_screen_capture.h"
 #include "flutter_video_renderer.h"
+#include "video_renderer_manager.h"
 
 #include "libwebrtc.h"
 #include "rtc_logging.h"
@@ -43,6 +44,7 @@ class FlutterWebRTC : public FlutterWebRTCBase,
  private:
   void initLoggerCallback(RTCLoggingSeverity severity);
   RTCLoggingSeverity str2LogSeverity(std::string str);
+  std::unique_ptr<VideoRendererManager> video_renderer_manager_;
 };
 
 }  // namespace flutter_webrtc_plugin

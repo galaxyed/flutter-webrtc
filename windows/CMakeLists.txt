@@ -24,6 +24,8 @@ add_library(${PLUGIN_NAME} SHARED
   "../common/cpp/src/flutter_peerconnection.cc"
   "../common/cpp/src/flutter_frame_capturer.cc"
   "../common/cpp/src/flutter_video_renderer.cc"
+  "../common/cpp/src/video_renderer_instance.cc"
+  "../common/cpp/src/video_renderer_manager.cc"
   "../common/cpp/src/flutter_screen_capture.cc"
   "../common/cpp/src/flutter_webrtc.cc"
   "../common/cpp/src/flutter_webrtc_base.cc"
@@ -47,7 +49,7 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/../common/cpp/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/include"
 )
-target_link_libraries(${PLUGIN_NAME} PRIVATE 
+target_link_libraries(${PLUGIN_NAME} PRIVATE
   flutter
   flutter_wrapper_plugin
   "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/lib/win64/libwebrtc.dll.lib"
