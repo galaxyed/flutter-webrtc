@@ -24,7 +24,7 @@
     _videoTrack = track;
     _lock = OS_UNFAIR_LOCK_INIT;
     _frameSize = CGSizeZero;
-    _rotation = -1;
+    _rotation = RTCVideoRotation_0;
     _lastPixelBuffer = nil;
     _frameAvailable = false;
     _disposed = false;
@@ -161,9 +161,9 @@
   if (pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
       pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
     // NV12
-    uint8_t* dstY = CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 0);
+    uint8_t* dstY = (uint8_t*)CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 0);
     const size_t dstYStride = CVPixelBufferGetBytesPerRowOfPlane(outputPixelBuffer, 0);
-    uint8_t* dstUV = CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 1);
+    uint8_t* dstUV = (uint8_t*)CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 1);
     const size_t dstUVStride = CVPixelBufferGetBytesPerRowOfPlane(outputPixelBuffer, 1);
 
     [RTCYUVHelper I420ToNV12:i420Buffer.dataY
@@ -180,7 +180,7 @@
                       height:i420Buffer.height];
 
   } else {
-    uint8_t* dst = CVPixelBufferGetBaseAddress(outputPixelBuffer);
+    uint8_t* dst = (uint8_t*)CVPixelBufferGetBaseAddress(outputPixelBuffer);
     const size_t bytesPerRow = CVPixelBufferGetBytesPerRow(outputPixelBuffer);
 
     if (pixelFormat == kCVPixelFormatType_32BGRA) {
