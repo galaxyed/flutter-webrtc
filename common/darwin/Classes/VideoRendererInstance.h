@@ -18,15 +18,18 @@
 @property(nonatomic, readonly) int64_t textureId;
 @property(nonatomic, weak, readonly) id<FlutterTextureRegistry> registry;
 @property(nonatomic, strong, readonly) RTCVideoTrack* videoTrack;
+@property(nonatomic, readonly) int64_t windowId;
 
 /**
  * Initialize a new renderer instance for the given video track.
  * @param registry Flutter texture registry for registering the texture
  * @param track The RTCVideoTrack to render
+ * @param windowId Optional window ID to associate with this renderer (for lifecycle management)
  * @return Initialized instance, or nil if initialization fails
  */
 - (instancetype)initWithRegistry:(id<FlutterTextureRegistry>)registry
-                       videoTrack:(RTCVideoTrack*)track;
+                       videoTrack:(RTCVideoTrack*)track
+                         windowId:(int64_t)windowId;
 
 /**
  * Dispose the renderer instance and release all resources.

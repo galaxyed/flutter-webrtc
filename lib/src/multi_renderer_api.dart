@@ -26,6 +26,7 @@ class MultiRendererAPI {
   /// Creates a new renderer instance for the given video track.
   ///
   /// [trackId] The ID of the video track to render.
+  /// [windowId] Optional window ID to associate with this renderer (for lifecycle management).
   ///
   /// Returns the textureId that can be used with Flutter's Texture widget.
   ///
@@ -35,19 +36,23 @@ class MultiRendererAPI {
   ///
   /// ```dart
   /// try {
-  ///   final textureId = await MultiRendererAPI.createRenderer(videoTrack.id);
+  ///   final textureId = await MultiRendererAPI.createRenderer(videoTrack.id, windowId: windowId);
   ///   // Use textureId with Texture widget
   /// } on PlatformException catch (e) {
   ///   print('Error: ${e.message}');
   /// }
   /// ```
-  static Future<int> createRenderer(String trackId) async {
+  static Future<int> createRenderer(String trackId, {int? windowId}) async {
     try {
+      final arguments = <String, dynamic>{
+        'trackId': trackId,
+      };
+      if (windowId != null) {
+        arguments['windowId'] = windowId;
+      }
       final result = await WebRTC.invokeMethod<int, dynamic>(
         'createRenderer',
-        <String, dynamic>{
-          'trackId': trackId,
-        },
+        arguments,
       );
 
       if (result == null) {

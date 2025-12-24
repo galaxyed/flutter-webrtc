@@ -23,13 +23,13 @@
   [self disposeAll];
 }
 
-- (int64_t)createRendererForTrack:(RTCVideoTrack*)track {
+- (int64_t)createRendererForTrack:(RTCVideoTrack*)track windowId:(int64_t)windowId {
   if (!track || !_registry) {
     return -1;
   }
 
   VideoRendererInstance* instance =
-      [[VideoRendererInstance alloc] initWithRegistry:_registry videoTrack:track];
+      [[VideoRendererInstance alloc] initWithRegistry:_registry videoTrack:track windowId:windowId];
 
   if (!instance) {
     return -1;
@@ -83,6 +83,34 @@
   for (VideoRendererInstance* instance in allInstances) {
     [instance dispose];
   }
+}
+
+- (void)disposeRenderersForWindow:(int64_t)windowId {
+  if (windowId == -1) {
+    return;
+  }
+
+  NSMutableArray<VideoRendererInstance*>* instancesToDispose = [NSMutableArray array];
+
+  os_unfair_lock_lock(&_lock);
+  NSMutableArray<NSNumber*>* keysToRemove = [NSMutableArray array];
+  for (NSNumber* key in _renderers) {
+    VideoRendererInstance* instance = _renderers[key];
+    if (instance && instance.windowId == windowId) {
+      [instancesToDispose addObject:instance];
+      [keysToRemove addObject:key];
+    }
+  }
+  for (NSNumber* key in keysToRemove) {
+    [_renderers removeObjectForKey:key];
+  }
+  os_unfair_lock_unlock(&_lock);
+
+  for (VideoRendererInstance* instance in instancesToDispose) {
+    [instance dispose];
+  }
+
+  NSLog(@"VideoRendererManager: Disposed %lu renderers for window %lld", (unsigned long)instancesToDispose.count, windowId);
 }
 
 @end

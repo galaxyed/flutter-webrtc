@@ -24,9 +24,10 @@
 /**
  * Create a new renderer instance for the given video track.
  * @param track The RTCVideoTrack to render
+ * @param windowId Optional window ID to associate with this renderer (for lifecycle management)
  * @return The textureId of the created renderer, or -1 if creation fails
  */
-- (int64_t)createRendererForTrack:(RTCVideoTrack*)track;
+- (int64_t)createRendererForTrack:(RTCVideoTrack*)track windowId:(int64_t)windowId;
 
 /**
  * Dispose a renderer instance by its textureId.
@@ -46,5 +47,11 @@
  * Called when the manager is being deallocated.
  */
 - (void)disposeAll;
+
+/**
+ * Dispose all renderer instances associated with a specific window.
+ * @param windowId The window ID whose renderers should be disposed
+ */
+- (void)disposeRenderersForWindow:(int64_t)windowId;
 
 @end

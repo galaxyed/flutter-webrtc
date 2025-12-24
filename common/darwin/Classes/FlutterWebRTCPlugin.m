@@ -1655,6 +1655,8 @@ static FlutterWebRTCPlugin *mainSingleton;
     } else if ([@"createRenderer" isEqualToString:call.method]) {
       NSDictionary* argsMap = call.arguments;
       NSString* trackId = argsMap[@"trackId"];
+      NSNumber* windowIdNumber = argsMap[@"windowId"];
+      int64_t windowId = windowIdNumber ? windowIdNumber.longLongValue : -1;
 
       if (!trackId) {
         result([FlutterError errorWithCode:@"createRendererFailed"
@@ -1685,7 +1687,7 @@ static FlutterWebRTCPlugin *mainSingleton;
       }
 
       RTCVideoTrack* videoTrack = (RTCVideoTrack*)track;
-      int64_t textureId = [self.videoRendererManager createRendererForTrack:videoTrack];
+      int64_t textureId = [self.videoRendererManager createRendererForTrack:videoTrack windowId:windowId];
 
       if (textureId == -1) {
         result([FlutterError errorWithCode:@"createRendererFailed"
@@ -1708,6 +1710,20 @@ static FlutterWebRTCPlugin *mainSingleton;
 
       int64_t textureId = textureIdNumber.longLongValue;
       [self.videoRendererManager disposeRenderer:textureId];
+      result(nil);
+    } else if ([@"disposeRenderersForWindow" isEqualToString:call.method]) {
+      NSDictionary* argsMap = call.arguments;
+      NSNumber* windowIdNumber = argsMap[@"windowId"];
+
+      if (!windowIdNumber) {
+        result([FlutterError errorWithCode:@"disposeRenderersForWindowFailed"
+                                   message:@"windowId is required"
+                                   details:nil]);
+        return;
+      }
+
+      int64_t windowId = windowIdNumber.longLongValue;
+      [self.videoRendererManager disposeRenderersForWindow:windowId];
       result(nil);
     } else {
       if([self handleFrameCryptorMethodCall:call result:result]) {

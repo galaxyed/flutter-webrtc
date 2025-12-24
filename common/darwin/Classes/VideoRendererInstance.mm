@@ -10,30 +10,47 @@
   os_unfair_lock _lock;
   bool _frameAvailable;
   bool _disposed;
+  bool _shuttingDown;  // Atomic flag to stop render loop
+  int64_t _windowId;
+  int64_t _textureId;  // Local copy for atomic access
 }
 
-@synthesize textureId = _textureId;
 @synthesize registry = _registry;
 @synthesize videoTrack = _videoTrack;
+@synthesize windowId = _windowId;
+
+- (int64_t)textureId {
+  os_unfair_lock_lock(&_lock);
+  int64_t tid = _textureId;
+  os_unfair_lock_unlock(&_lock);
+  return tid;
+}
 
 - (instancetype)initWithRegistry:(id<FlutterTextureRegistry>)registry
-                       videoTrack:(RTCVideoTrack*)track {
+                       videoTrack:(RTCVideoTrack*)track
+                         windowId:(int64_t)windowId {
   self = [super init];
   if (self) {
     _registry = registry;
     _videoTrack = track;
+    _windowId = windowId;
     _lock = OS_UNFAIR_LOCK_INIT;
     _frameSize = CGSizeZero;
     _rotation = RTCVideoRotation_0;
     _lastPixelBuffer = nil;
     _frameAvailable = false;
     _disposed = false;
+    _shuttingDown = false;
+    _textureId = -1;
 
     // Register Flutter texture
-    _textureId = [_registry registerTexture:self];
-    if (_textureId == -1) {
+    int64_t textureId = [_registry registerTexture:self];
+    if (textureId == -1) {
       return nil;
     }
+    os_unfair_lock_lock(&_lock);
+    _textureId = textureId;
+    os_unfair_lock_unlock(&_lock);
 
     // Attach track → renderer
     if (_videoTrack) {
@@ -63,11 +80,19 @@
 #pragma mark - RTCVideoRenderer
 
 - (void)renderFrame:(RTCVideoFrame*)frame {
-  if (_disposed || !_videoTrack) {
+  // CRITICAL: Check shuttingDown FIRST (atomic, no lock needed for read)
+  // This prevents race condition where dispose sets flag but renderFrame still runs
+  if (_shuttingDown) {
     return;
   }
 
   os_unfair_lock_lock(&_lock);
+
+  // Double-check after acquiring lock
+  if (_disposed || _shuttingDown || _textureId == -1 || !_videoTrack) {
+    os_unfair_lock_unlock(&_lock);
+    return;
+  }
 
   // Update frame size if changed
   CGSize newSize = CGSizeMake(frame.width, frame.height);
@@ -100,13 +125,24 @@
     _frameAvailable = true;
   }
 
+  // Capture textureId and registry while holding lock
+  int64_t textureId = _textureId;
+  id<FlutterTextureRegistry> registry = _registry;
+  bool isShuttingDown = _shuttingDown;
+
   os_unfair_lock_unlock(&_lock);
 
-  // Notify Flutter to redraw on main queue
-  if (_textureId != -1 && !_disposed) {
+  // CRITICAL: Only notify if NOT shutting down and textureId is valid
+  // This prevents calling markTextureFrameAvailable after dispose
+  if (textureId != -1 && !isShuttingDown && registry) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (!self->_disposed && self->_textureId != -1) {
-        [self->_registry textureFrameAvailable:self->_textureId];
+      // Final check on main queue (atomic read, no lock needed)
+      if (!self->_shuttingDown && self->_textureId != -1 && self->_registry) {
+        @try {
+          [self->_registry textureFrameAvailable:textureId];
+        } @catch (NSException* exception) {
+          // Silently ignore - texture already disposed
+        }
       }
     });
   }
@@ -214,32 +250,52 @@
 #pragma mark - Dispose
 
 - (void)dispose {
+  // Prevent multiple dispose calls
+  os_unfair_lock_lock(&_lock);
   if (_disposed) {
+    os_unfair_lock_unlock(&_lock);
     return;
   }
 
+  // STEP 1: Set shuttingDown flag FIRST (atomic, prevents new renderFrame calls)
+  _shuttingDown = true;
+  int64_t textureId = _textureId;
+  RTCVideoTrack* videoTrack = _videoTrack;
+  id<FlutterTextureRegistry> registry = _registry;
+  os_unfair_lock_unlock(&_lock);
+
+  // STEP 2: STOP render loop (removeRenderer) - BLOCKING
+  // This ensures WebRTC stops calling renderFrame BEFORE we unregister texture
+  if (videoTrack) {
+    [videoTrack removeRenderer:self];
+    // Give WebRTC a moment to process the removal
+    // This prevents race condition where renderFrame is already queued
+    usleep(10000);  // 10ms - enough for WebRTC to stop queuing frames
+  }
+
+  // STEP 3: Zero textureId BEFORE unregister (prevents renderFrame from using it)
   os_unfair_lock_lock(&_lock);
-  _disposed = true;
+  _textureId = -1;  // CRITICAL: Zero immediately
+  _videoTrack = nil;
+  os_unfair_lock_unlock(&_lock);
 
-  // Detach renderer from VideoTrack
-  if (_videoTrack) {
-    [_videoTrack removeRenderer:self];
-    _videoTrack = nil;
+  // STEP 4: Unregister texture (now safe - no renderFrame can use it)
+  if (textureId != -1 && registry) {
+    @try {
+      [registry unregisterTexture:textureId];
+    } @catch (NSException* exception) {
+      NSLog(@"VideoRendererInstance: Error unregistering texture: %@", exception.reason);
+    }
   }
 
-  // Unregister Flutter texture
-  if (_textureId != -1) {
-    [_registry unregisterTexture:_textureId];
-    _textureId = -1;
-  }
-
-  // Release GPU resources
+  // STEP 5: Release GPU resources
+  os_unfair_lock_lock(&_lock);
   if (_lastPixelBuffer) {
     CVBufferRelease(_lastPixelBuffer);
     _lastPixelBuffer = nil;
   }
-
   _frameAvailable = false;
+  _disposed = true;
   os_unfair_lock_unlock(&_lock);
 }
 
