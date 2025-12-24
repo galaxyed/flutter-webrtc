@@ -82,16 +82,18 @@
 - (void)renderFrame:(RTCVideoFrame*)frame {
   // CRITICAL: Check shuttingDown FIRST (atomic, no lock needed for read)
   // This prevents race condition where dispose sets flag but renderFrame still runs
+  // This is the FIRST line of defense - drop frame immediately if shutting down
   if (_shuttingDown) {
-    return;
+    return;  // Producer may still feed frames, but we drop them here
   }
 
   os_unfair_lock_lock(&_lock);
 
-  // Double-check after acquiring lock
+  // Double-check after acquiring lock (second line of defense)
+  // Check multiple conditions to ensure we're still valid
   if (_disposed || _shuttingDown || _textureId == -1 || !_videoTrack) {
     os_unfair_lock_unlock(&_lock);
-    return;
+    return;  // Drop frame - we're shutting down or already disposed
   }
 
   // Update frame size if changed
@@ -134,14 +136,18 @@
 
   // CRITICAL: Only notify if NOT shutting down and textureId is valid
   // This prevents calling markTextureFrameAvailable after dispose
+  // Third line of defense - check again before dispatching to main queue
   if (textureId != -1 && !isShuttingDown && registry) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      // Final check on main queue (atomic read, no lock needed)
+      // Final check on main queue (fourth line of defense)
+      // By the time we reach main queue, dispose may have completed
+      // Check all conditions one more time before calling markTextureFrameAvailable
       if (!self->_shuttingDown && self->_textureId != -1 && self->_registry) {
         @try {
           [self->_registry textureFrameAvailable:textureId];
         } @catch (NSException* exception) {
-          // Silently ignore - texture already disposed
+          // Silently ignore - texture already disposed or channel dead
+          // This is expected during window close, no need to log
         }
       }
     });
@@ -258,33 +264,43 @@
   }
 
   // STEP 1: Set shuttingDown flag FIRST (atomic, prevents new renderFrame calls)
+  // This must be set BEFORE removing renderer to prevent race condition
   _shuttingDown = true;
   int64_t textureId = _textureId;
   RTCVideoTrack* videoTrack = _videoTrack;
   id<FlutterTextureRegistry> registry = _registry;
   os_unfair_lock_unlock(&_lock);
 
-  // STEP 2: STOP render loop (removeRenderer) - BLOCKING
-  // This ensures WebRTC stops calling renderFrame BEFORE we unregister texture
+  // STEP 2: STOP PRODUCER (WebRTC video track) - CRITICAL
+  // This stops the source of frames BEFORE we unregister texture
+  // Without this, WebRTC will continue feeding frames even after texture is unregistered
   if (videoTrack) {
+    // Remove this renderer from the track (stops producer)
     [videoTrack removeRenderer:self];
-    // Give WebRTC a moment to process the removal
-    // This prevents race condition where renderFrame is already queued
-    usleep(10000);  // 10ms - enough for WebRTC to stop queuing frames
+
+    // CRITICAL: Wait for WebRTC to process removal and stop queuing frames
+    // WebRTC may have frames already queued in its internal queue
+    // We need to wait long enough for those to be processed/dropped
+    // 50ms should be enough for WebRTC to flush its queue
+    usleep(50000);  // 50ms - ensures WebRTC stops feeding frames
+
+    NSLog(@"VideoRendererInstance: Stopped video track (producer) for texture %lld", textureId);
   }
 
-  // STEP 3: Zero textureId BEFORE unregister (prevents renderFrame from using it)
+  // STEP 3: Zero textureId BEFORE unregister (prevents any remaining renderFrame from using it)
+  // Even if a frame somehow gets through, textureId check will fail
   os_unfair_lock_lock(&_lock);
-  _textureId = -1;  // CRITICAL: Zero immediately
+  _textureId = -1;  // CRITICAL: Zero immediately - any renderFrame after this will see -1 and return
   _videoTrack = nil;
   os_unfair_lock_unlock(&_lock);
 
-  // STEP 4: Unregister texture (now safe - no renderFrame can use it)
+  // STEP 4: Unregister texture (now safe - producer stopped, textureId zeroed)
   if (textureId != -1 && registry) {
     @try {
       [registry unregisterTexture:textureId];
+      NSLog(@"VideoRendererInstance: Unregistered texture %lld", textureId);
     } @catch (NSException* exception) {
-      NSLog(@"VideoRendererInstance: Error unregistering texture: %@", exception.reason);
+      NSLog(@"VideoRendererInstance: Error unregistering texture %lld: %@", textureId, exception.reason);
     }
   }
 
@@ -297,6 +313,8 @@
   _frameAvailable = false;
   _disposed = true;
   os_unfair_lock_unlock(&_lock);
+
+  NSLog(@"VideoRendererInstance: Completed disposal for texture %lld", textureId);
 }
 
 @end
