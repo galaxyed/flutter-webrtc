@@ -8,6 +8,9 @@ namespace flutter_webrtc_plugin {
 
 static EventChannelProxy* eventChannelProxy = nullptr;
 
+// Forward declaration
+extern FlutterWebRTC* FlutterWebRTCPluginSharedInstance();
+
 FlutterWebRTC::FlutterWebRTC(FlutterWebRTCPlugin* plugin)
     : FlutterWebRTCBase::FlutterWebRTCBase(plugin->messenger(),
                                            plugin->textures(),
@@ -1305,8 +1308,24 @@ void FlutterWebRTC::HandleMethodCall(
       return;
     }
 
-    // Lookup video track by trackId
+    // Lookup video track by trackId - first try current instance, then main instance, then shared instance
     RTCMediaTrack* track = MediaTrackForId(trackId);
+    if (!track) {
+      // Try main instance (first window) if track not found in current instance
+      // This helps in multi-window scenarios where tracks exist in the main window's engine
+      extern FlutterWebRTC* GetMainWebRTCInstance();
+      FlutterWebRTC* mainInstance = GetMainWebRTCInstance();
+      if (mainInstance && mainInstance != this) {
+        track = mainInstance->MediaTrackForId(trackId);
+      }
+      // Also try shared instance (might be different from main)
+      if (!track) {
+        FlutterWebRTC* sharedInstance = FlutterWebRTCPluginSharedInstance();
+        if (sharedInstance && sharedInstance != this && sharedInstance != mainInstance) {
+          track = sharedInstance->MediaTrackForId(trackId);
+        }
+      }
+    }
     if (!track) {
       result->Error("createRendererFailed",
                    "VideoTrack not found for trackId: " + trackId);

@@ -5,9 +5,12 @@
 #include "task_runner_windows.h"
 
 #include <flutter/plugin_registrar_windows.h>
+#include <vector>
 
 const char* kChannelName = "FlutterWebRTC.Method";
 static flutter_webrtc_plugin::FlutterWebRTC* g_shared_instance = nullptr;
+static flutter_webrtc_plugin::FlutterWebRTC* g_main_instance = nullptr;
+static std::vector<flutter_webrtc_plugin::FlutterWebRTC*> g_all_instances;
 
 namespace flutter_webrtc_plugin {
 
@@ -50,6 +53,11 @@ class FlutterWebRTCPluginImpl : public FlutterWebRTCPlugin {
         task_runner_(std::make_unique<TaskRunnerWindows>()) {
     webrtc_ = std::make_unique<FlutterWebRTC>(this);
     g_shared_instance = webrtc_.get();
+    g_all_instances.push_back(webrtc_.get());
+    // Keep reference to first instance (main window) for multi-window track lookup
+    if (g_main_instance == nullptr) {
+      g_main_instance = webrtc_.get();
+    }
   }
 
   // Called when a method is called on |channel_|;
@@ -81,4 +89,12 @@ void FlutterWebRTCPluginRegisterWithRegistrar(
 
 flutter_webrtc_plugin::FlutterWebRTC* FlutterWebRTCPluginSharedInstance() {
   return g_shared_instance;
-} 
+}
+
+flutter_webrtc_plugin::FlutterWebRTC* GetMainWebRTCInstance() {
+  return g_main_instance;
+}
+
+std::vector<flutter_webrtc_plugin::FlutterWebRTC*> GetAllWebRTCInstances() {
+  return g_all_instances;
+}

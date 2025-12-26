@@ -119,6 +119,7 @@ void postEvent(FlutterEventSink _Nonnull sink, id _Nullable event) {
 }
 
 static FlutterWebRTCPlugin *sharedSingleton;
+static FlutterWebRTCPlugin *mainSingleton;
 
 + (FlutterWebRTCPlugin *)sharedSingleton
 {
@@ -161,6 +162,10 @@ static FlutterWebRTCPlugin *sharedSingleton;
 
   self = [super init];
   sharedSingleton = self;
+  // Keep reference to first instance (main window) for multi-window track lookup
+  if (mainSingleton == nil) {
+    mainSingleton = self;
+  }
 
   FlutterEventChannel* eventChannel =
       [FlutterEventChannel eventChannelWithName:@"FlutterWebRTC.Event" binaryMessenger:messenger];
@@ -1658,8 +1663,20 @@ static FlutterWebRTCPlugin *sharedSingleton;
         return;
       }
 
-      // Lookup video track by trackId
+      // Lookup video track by trackId - first try current instance, then main singleton, then shared singleton
       RTCMediaStreamTrack* track = [self trackForId:trackId peerConnectionId:nil];
+      if (!track || ![track isKindOfClass:[RTCVideoTrack class]]) {
+        // Try main singleton (first window) if track not found in current instance
+        // This helps in multi-window scenarios where tracks exist in the main window's engine
+        FlutterWebRTCPlugin* mainPlugin = mainSingleton;
+        if (mainPlugin && mainPlugin != self) {
+          track = [mainPlugin trackForId:trackId peerConnectionId:nil];
+        }
+        // Also try shared singleton (might be different from main)
+        if ((!track || ![track isKindOfClass:[RTCVideoTrack class]]) && sharedSingleton != self && sharedSingleton != mainPlugin) {
+          track = [sharedSingleton trackForId:trackId peerConnectionId:nil];
+        }
+      }
       if (!track || ![track isKindOfClass:[RTCVideoTrack class]]) {
         result([FlutterError errorWithCode:@"createRendererFailed"
                                    message:[NSString stringWithFormat:@"VideoTrack not found for trackId: %@", trackId]
