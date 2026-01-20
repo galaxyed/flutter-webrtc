@@ -54,4 +54,11 @@
  */
 - (void)disposeRenderersForWindow:(int64_t)windowId;
 
+/**
+ * Handle texture unregistration from external source (e.g., Flutter engine teardown).
+ * This will dispose the renderer instance to prevent further markTextureFrameAvailable calls.
+ * @param textureId The textureId that was unregistered
+ */
+- (void)handleTextureUnregistered:(int64_t)textureId;
+
 @end

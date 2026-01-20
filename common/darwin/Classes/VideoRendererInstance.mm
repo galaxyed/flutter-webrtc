@@ -1,4 +1,5 @@
 #import "VideoRendererInstance.h"
+#import "VideoRendererManager.h"
 #import <WebRTC/WebRTC.h>
 #import <AVFoundation/AVFoundation.h>
 #import <os/lock.h>
@@ -18,6 +19,7 @@
 @synthesize registry = _registry;
 @synthesize videoTrack = _videoTrack;
 @synthesize windowId = _windowId;
+@synthesize manager = _manager;
 
 - (int64_t)textureId {
   os_unfair_lock_lock(&_lock);
@@ -131,23 +133,71 @@
   int64_t textureId = _textureId;
   id<FlutterTextureRegistry> registry = _registry;
   bool isShuttingDown = _shuttingDown;
+  VideoRendererManager* manager = _manager;
 
   os_unfair_lock_unlock(&_lock);
+
+  // CRITICAL: Check if registry is still valid
+  // If registry became nil, texture was likely unregistered by Flutter engine
+  if (!registry && textureId != -1 && manager) {
+    // Registry is nil but textureId is still valid - texture was unregistered externally
+    // Dispose immediately to prevent further calls
+    [manager handleTextureUnregistered:textureId];
+    return;
+  }
 
   // CRITICAL: Only notify if NOT shutting down and textureId is valid
   // This prevents calling markTextureFrameAvailable after dispose
   // Third line of defense - check again before dispatching to main queue
   if (textureId != -1 && !isShuttingDown && registry) {
+    // Use weak self to avoid retain cycle and check if instance still exists
+    __weak VideoRendererInstance* weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
+      VideoRendererInstance* strongSelf = weakSelf;
+      if (!strongSelf) {
+        return;  // Instance was deallocated
+      }
+
       // Final check on main queue (fourth line of defense)
       // By the time we reach main queue, dispose may have completed
       // Check all conditions one more time before calling markTextureFrameAvailable
-      if (!self->_shuttingDown && self->_textureId != -1 && self->_registry) {
-        @try {
-          [self->_registry textureFrameAvailable:textureId];
-        } @catch (NSException* exception) {
-          // Silently ignore - texture already disposed or channel dead
-          // This is expected during window close, no need to log
+      os_unfair_lock_lock(&strongSelf->_lock);
+      BOOL shouldCall = !strongSelf->_shuttingDown &&
+                        strongSelf->_textureId != -1 &&
+                        strongSelf->_textureId == textureId &&
+                        strongSelf->_registry != nil &&
+                        !strongSelf->_disposed;
+      int64_t currentTextureId = strongSelf->_textureId;
+      VideoRendererManager* manager = strongSelf->_manager;
+      os_unfair_lock_unlock(&strongSelf->_lock);
+
+      if (!shouldCall) {
+        return;  // Already disposed or invalid state
+      }
+
+      @try {
+        [strongSelf->_registry textureFrameAvailable:textureId];
+      } @catch (NSException* exception) {
+        // Any exception from textureFrameAvailable indicates texture was unregistered
+        // (Flutter engine may unregister textures during window/engine teardown)
+        // Dispose this instance immediately to prevent further calls
+        os_unfair_lock_lock(&strongSelf->_lock);
+        // Double-check if already disposed (may have been disposed by another thread)
+        if (strongSelf->_disposed || strongSelf->_textureId != currentTextureId) {
+          os_unfair_lock_unlock(&strongSelf->_lock);
+          return;
+        }
+        // Zero textureId immediately to prevent further renderFrame calls
+        strongSelf->_textureId = -1;
+        VideoRendererManager* currentManager = strongSelf->_manager;
+        os_unfair_lock_unlock(&strongSelf->_lock);
+
+        // Notify manager to dispose this instance (will remove from dictionary and call dispose)
+        if (currentManager && currentTextureId != -1) {
+          [currentManager handleTextureUnregistered:currentTextureId];
+        } else {
+          // Fallback: dispose directly if manager is not available
+          [strongSelf dispose];
         }
       }
     });
@@ -269,6 +319,8 @@
   int64_t textureId = _textureId;
   RTCVideoTrack* videoTrack = _videoTrack;
   id<FlutterTextureRegistry> registry = _registry;
+  // Clear registry reference to help detect unregistration in renderFrame
+  _registry = nil;
   os_unfair_lock_unlock(&_lock);
 
   // STEP 2: STOP PRODUCER (WebRTC video track) - CRITICAL
@@ -295,12 +347,15 @@
   os_unfair_lock_unlock(&_lock);
 
   // STEP 4: Unregister texture (now safe - producer stopped, textureId zeroed)
+  // Note: texture may have already been unregistered externally by Flutter engine
   if (textureId != -1 && registry) {
     @try {
       [registry unregisterTexture:textureId];
       NSLog(@"VideoRendererInstance: Unregistered texture %lld", textureId);
     } @catch (NSException* exception) {
-      NSLog(@"VideoRendererInstance: Error unregistering texture %lld: %@", textureId, exception.reason);
+      // Texture may have already been unregistered externally (e.g., during engine teardown)
+      // This is expected and safe to ignore
+      NSLog(@"VideoRendererInstance: Texture %lld already unregistered (expected if unregistered externally)", textureId);
     }
   }
 

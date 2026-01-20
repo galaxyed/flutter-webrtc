@@ -40,6 +40,9 @@
     return -1;
   }
 
+  // Set manager reference so instance can notify when texture is unregistered externally
+  instance.manager = self;
+
   os_unfair_lock_lock(&_lock);
   _renderers[@(textureId)] = instance;
   os_unfair_lock_unlock(&_lock);
@@ -111,6 +114,12 @@
   }
 
   NSLog(@"VideoRendererManager: Disposed %lu renderers for window %lld", (unsigned long)instancesToDispose.count, windowId);
+}
+
+- (void)handleTextureUnregistered:(int64_t)textureId {
+  // Called when texture is unregistered externally (e.g., by Flutter engine during teardown)
+  // Dispose the renderer instance to prevent further markTextureFrameAvailable calls
+  [self disposeRenderer:textureId];
 }
 
 @end

@@ -7,6 +7,7 @@
 #import <WebRTC/WebRTC.h>
 
 @class RTCVideoTrack;
+@class VideoRendererManager;
 
 /**
  * VideoRendererInstance represents a single renderer instance attached to a VideoTrack.
@@ -19,6 +20,7 @@
 @property(nonatomic, weak, readonly) id<FlutterTextureRegistry> registry;
 @property(nonatomic, strong, readonly) RTCVideoTrack* videoTrack;
 @property(nonatomic, readonly) int64_t windowId;
+@property(nonatomic, weak) VideoRendererManager* manager;
 
 /**
  * Initialize a new renderer instance for the given video track.
